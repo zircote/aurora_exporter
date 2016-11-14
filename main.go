@@ -148,7 +148,6 @@ func (e *exporter) parseVars(url string, bypass bool, ch chan<- prometheus.Metri
 		if !ok {
 			continue
 		}
-
 		if desc, ok := counters[name]; ok {
 			ch <- prometheus.MustNewConstMetric(
 				desc,

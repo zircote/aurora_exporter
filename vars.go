@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tommyulfsparre/aurora_exporter/.build/go1.7.1/src/fmt"
 )
 
 func newDesc(subsys, name, descr string) *prometheus.Desc {
