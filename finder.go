@@ -9,14 +9,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"encoding/json"
 
 	"github.com/golang/glog"
 	"github.com/samuel/go-zookeeper/zk"
 )
 
 const (
-	zkPath         = "/aurora/scheduler"
-	zkLeaderPrefix = "singleton_candidate_"
+	zkPath = "/aurora/scheduler"
+	zkLeaderPrefix = "member_"
 )
 
 type finder interface {
@@ -80,10 +81,11 @@ func hostsFromURL(urls string) (hosts []string, err error) {
 }
 
 type zkFinder struct {
-	conn *zk.Conn
+	conn     *zk.Conn
 
 	sync.RWMutex
 	leaderIP string
+	leaderPort int
 }
 
 func newZkFinder(url string) *zkFinder {
@@ -92,7 +94,7 @@ func newZkFinder(url string) *zkFinder {
 		panic(err)
 	}
 
-	conn, events, err := zk.Connect(zkSrvs, 20*time.Second)
+	conn, events, err := zk.Connect(zkSrvs, 20 * time.Second)
 	if err != nil {
 		panic(err)
 	}
@@ -154,8 +156,30 @@ func (f *zkFinder) leaderURL() (string, error) {
 		return "", errors.New("zkFinder: no leader found via ZooKeeper")
 	}
 
-	return fmt.Sprintf("http://%s:8081", f.leaderIP), nil
+	return fmt.Sprintf("http://%s:%d", f.leaderIP, f.leaderPort), nil
 }
+type entity struct {
+	ServiceEndpoint     endpoint            `json:"serviceEndpoint"`
+	AdditionalEndpoints map[string]endpoint `json:"additionalEndpoints"` // unused
+	Status              string              `json:"status"`
+}
+
+type endpoint struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+
+// possible endpoint statuses. Currently only concerned with ALIVE.
+const (
+	statusDead = "DEAD"
+	statusStarting = "STARTING"
+	statusAlive = "ALIVE"
+	statusStopping = "STOPPING"
+	statusStopped = "STOPPED"
+	statusWarning = "WARNING"
+	statusUnknown = "UNKNOWN"
+)
 
 func (f *zkFinder) watch() {
 	for _ = range time.NewTicker(1 * time.Second).C {
@@ -175,9 +199,16 @@ func (f *zkFinder) watch() {
 			glog.Warning(err)
 			continue
 		}
-
+		dec := json.NewDecoder(strings.NewReader(string(data)))
 		f.Lock()
-		f.leaderIP = string(data)
+		var e entity
+		// decode an array value (Message)
+		err = dec.Decode(&e)
+		if err != nil {
+			glog.Fatal(err)
+		}
+		f.leaderIP = string(e.ServiceEndpoint.Host)
+		f.leaderPort = e.ServiceEndpoint.Port
 		f.Unlock()
 
 		for ev := range events {
