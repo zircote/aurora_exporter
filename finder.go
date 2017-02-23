@@ -9,13 +9,28 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"encoding/json"
 
 	"github.com/golang/glog"
 	"github.com/samuel/go-zookeeper/zk"
 )
 
-const zkLeaderPrefix = "singleton_candidate_"
 
+const (
+	zkLeaderPrefix = "member_"
+	SOH = "\x01"
+)
+
+type entity struct {
+	ServiceEndpoint     endpoint            `json:"serviceEndpoint"`
+	AdditionalEndpoints map[string]endpoint `json:"additionalEndpoints"` // unused
+	Status              string              `json:"status"`
+}
+
+type endpoint struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
 
 type finder interface {
 	leaderURL() (string, error)
@@ -82,6 +97,7 @@ type zkFinder struct {
 
 	sync.RWMutex
 	leaderIP string
+	leaderPort int
 }
 
 func newZkFinder(url, znode string) *zkFinder {
@@ -152,7 +168,7 @@ func (f *zkFinder) leaderURL() (string, error) {
 		return "", errors.New("zkFinder: no leader found via ZooKeeper")
 	}
 
-	return fmt.Sprintf("http://%s:8081", f.leaderIP), nil
+	return fmt.Sprintf("http://%s:%d", f.leaderIP, f.leaderPort), nil
 }
 
 func (f *zkFinder) watch(znode string) {
@@ -175,7 +191,18 @@ func (f *zkFinder) watch(znode string) {
 		}
 
 		f.Lock()
-		f.leaderIP = string(data)
+		if string(data) == SOH {
+			err = errors.New("recieved SOH control character")
+		}
+
+		e := &entity{}
+		err = json.Unmarshal(data, &e)
+		if err != nil {
+			glog.Warning(err)
+			continue
+		}
+		f.leaderIP = e.ServiceEndpoint.Host
+		f.leaderPort = e.ServiceEndpoint.Port
 		f.Unlock()
 
 		for ev := range events {
